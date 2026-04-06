@@ -1,0 +1,16 @@
+# ============================================================================
+# DIRECTORY: db/migrations/versions/
+# ============================================================================
+#
+# PURPOSE:
+#   Contains Alembic migration version scripts. Each file represents a
+#   database schema change with upgrade() and downgrade() functions.
+#
+# EXPECTED MIGRATIONS:
+#   - 001_create_sessions_table.py    → CREATE TABLE sessions
+#   - 002_create_tasks_table.py       → CREATE TABLE tasks
+#   - 003_create_agent_logs_table.py  → CREATE TABLE agent_logs
+#   - 004_create_user_preferences.py  → CREATE TABLE user_preferences
+#   - (future migrations as schema evolves)
+#
+# ============================================================================
