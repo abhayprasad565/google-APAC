@@ -1,107 +1,112 @@
-# ============================================================================
-# FILE: tools/search_tool.py
-# LAYER: L4 — Google Search FunctionTool
-# ============================================================================
-#
-# PURPOSE:
-#   Wraps the Google Custom Search API (or Serper API) as ADK FunctionTools.
-#   Also provides a fetch_page_content tool for the research agent to read
-#   full web pages, and a session_store_research tool to persist findings.
-#   Does NOT use MCP — uses direct HTTP calls wrapped in FunctionTool.
-#
-# KEY RESPONSIBILITIES:
-#   1. Execute web searches via Google Custom Search API
-#   2. Fetch and extract main content from web pages
-#   3. Persist research summaries to session memory
-#   4. Expose all tools via load_research_tools()
-#
-# ============================================================================
-#
-#
-# ── FUNCTION (FunctionTool): google_search ──────────────────────────────────
-#
-# async function google_search(query, num_results) -> list[dict]
-#
-#   TASK:
-#     Performs a web search using the Google Custom Search API. Returns
-#     the top results with title, URL, and snippet.
-#
-#   INPUT:
-#     query       : str   — the search query string
-#                           e.g. "latest AI agent framework trends 2025"
-#     num_results : int   — number of results to return (default: 5)
-#
-#   OUTPUT:
-#     list[dict] — each dict contains:
-#       {
-#         title   : str   — page title
-#         url     : str   — full URL
-#         snippet : str   — search result snippet
-#       }
-#
-#   DEPENDENCIES:
-#     - settings.SEARCH_API_KEY  — Google Custom Search API key
-#     - settings.SEARCH_API_URL  — API endpoint URL
-#
-#
-# ── FUNCTION (FunctionTool): fetch_page_content ─────────────────────────────
-#
-# async function fetch_page_content(url) -> dict
-#
-#   TASK:
-#     Fetches a web page and extracts its main text content, stripping
-#     navigation, ads, and boilerplate HTML. Content is capped at 4000
-#     characters to stay within LLM context limits.
-#
-#   INPUT:
-#     url : str — full URL of the page to fetch
-#                 e.g. "https://example.com/article"
-#
-#   OUTPUT:
-#     dict
-#       {
-#         url     : str   — echo back the URL
-#         content : str   — extracted main text, max 4000 chars
-#       }
-#
-#   ERROR HANDLING:
-#     - HTTP timeout (10s) returns {url, content: "Error: timeout"}
-#     - 4xx/5xx returns {url, content: "Error: HTTP <status_code>"}
-#
-#
-# ── FUNCTION (FunctionTool): session_store_research ─────────────────────────
-#
-# async function session_store_research(topic, summary) -> dict
-#
-#   TASK:
-#     Persists a research summary to the ADK session state under the
-#     key "research_cache[topic]". This allows the orchestrator or
-#     other agents to retrieve prior research without re-searching.
-#
-#   INPUT:
-#     topic   : str   — the research topic (used as cache key)
-#     summary : str   — the research summary to store
-#
-#   OUTPUT:
-#     dict
-#       {
-#         stored : bool   — True on success
-#         topic  : str    — echo back the topic key
-#       }
-#
-#
-# ── FUNCTION: load_research_tools ───────────────────────────────────────────
-#
-# function load_research_tools() -> list[FunctionTool]
-#
-#   TASK:
-#     Returns the list of all research-related FunctionTools for the
-#     research_agent to register.
-#
-#   INPUT:
-#     None
-#
-#   OUTPUT:
-#     list[FunctionTool] — [google_search, fetch_page_content, session_store_research]
-#
-# ============================================================================
+"""
+L4 — Google Search & Web Research FunctionTools
+
+Wraps Google Custom Search API and page fetching as ADK FunctionTools.
+Does NOT use MCP — uses direct HTTP calls.
+"""
+
+import httpx
+from typing import Any
+
+try:
+    from google.adk.tools import FunctionTool
+except ImportError:
+    # Stub: treat FunctionTool as a passthrough decorator
+    def FunctionTool(func):
+        return func
+
+from command_center.config.settings import settings
+
+
+async def google_search(query: str, num_results: int = 5) -> list[dict[str, str]]:
+    """Search the web for current information on a topic.
+
+    Args:
+        query: The search query string.
+        num_results: Number of results to return (default 5).
+
+    Returns:
+        A list of dicts, each with 'title', 'url', and 'snippet'.
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            settings.SEARCH_API_URL,
+            params={
+                "q": query,
+                "num": num_results,
+                "key": settings.SEARCH_API_KEY,
+            },
+            timeout=10.0,
+        )
+
+    if response.status_code != 200:
+        return [{"title": "Error", "url": "", "snippet": f"Search API returned HTTP {response.status_code}"}]
+
+    data = response.json()
+    items = data.get("items", [])
+    return [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("link", ""),
+            "snippet": item.get("snippet", ""),
+        }
+        for item in items[:num_results]
+    ]
+
+
+async def fetch_page_content(url: str) -> dict[str, str]:
+    """Fetch and return the main text content of a webpage.
+
+    Args:
+        url: Full URL of the page to fetch.
+
+    Returns:
+        A dict with 'url' and 'content' (max 4000 chars).
+    """
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(url, timeout=10.0)
+
+        if response.status_code >= 400:
+            return {"url": url, "content": f"Error: HTTP {response.status_code}"}
+
+        # Basic content extraction: strip HTML tags
+        text = _extract_text(response.text)
+        return {"url": url, "content": text[:4000]}
+
+    except httpx.TimeoutException:
+        return {"url": url, "content": "Error: timeout"}
+    except Exception as e:
+        return {"url": url, "content": f"Error: {str(e)}"}
+
+
+async def session_store_research(topic: str, summary: str) -> dict[str, Any]:
+    """Persist a research summary to session memory for future reference.
+
+    Args:
+        topic: The research topic (used as cache key).
+        summary: The research summary to store.
+
+    Returns:
+        A dict with 'stored' (bool) and 'topic' (str).
+    """
+    # NOTE: Actual session persistence will be wired in main.py
+    # via the ADK SessionService. For now, return success.
+    return {"stored": True, "topic": topic}
+
+
+def _extract_text(html: str) -> str:
+    """Very basic HTML-to-text extraction. Strips tags and collapses whitespace."""
+    import re
+    # Remove script and style blocks
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    # Remove HTML tags
+    text = re.sub(r"<[^>]+>", " ", text)
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def load_research_tools() -> list:
+    """Returns the list of all research-related tools for the research_agent."""
+    return [google_search, fetch_page_content, session_store_research]

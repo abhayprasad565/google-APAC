@@ -1,81 +1,48 @@
-# ============================================================================
-# FILE: agents/root_agent.py
-# LAYER: L2 — Orchestrator Agent
-# ============================================================================
-#
-# PURPOSE:
-#   Defines the primary ADK LlmAgent that acts as the central orchestrator.
-#   Registers all four sub-agents as AgentTool instances so Gemini can
-#   decide which to call. Contains the system instruction that teaches the
-#   orchestrator how to plan multi-step workflows, sequence dependent tasks,
-#   and resolve scheduling conflicts.
-#
-# KEY RESPONSIBILITIES:
-#   1. Define the SYSTEM_INSTRUCTION for orchestration logic
-#   2. Register calendar_agent, task_agent, email_agent, research_agent
-#      as AgentTool instances
-#   3. Handle compound requests by calling multiple agents in sequence
-#   4. Pass output from one agent as context to the next agent
-#   5. Summarise all actions taken at the end of the workflow
-#
-# ============================================================================
-#
-#
-# ── CONSTANT: SYSTEM_INSTRUCTION ────────────────────────────────────────────
-#
-#   str — the system prompt that defines the orchestrator's behaviour
-#
-#   TEACHES THE MODEL TO:
-#     - Analyse user requests and identify all required actions
-#     - Route single-domain requests to the correct sub-agent
-#     - For compound requests, call multiple agents in logical order
-#     - Pass output of one agent as context to the next (chaining)
-#     - If a calendar slot is unavailable, ask calendar_agent for alternatives
-#     - Always confirm before executing irreversible actions (send, delete)
-#     - Summarise all actions taken at the end
-#
-#
-# ── OBJECT: root_agent ──────────────────────────────────────────────────────
-#
-# root_agent : LlmAgent
-#
-#   TASK:
-#     The top-level agent that the ADK Runner invokes. Receives the
-#     ParsedCommand as its initial user message and uses Gemini to decide
-#     which sub-agent(s) to call and in what order.
-#
-#   CONFIGURATION:
-#     name        : "command_center_root"
-#     model       : "gemini-2.0-flash"
-#     instruction : SYSTEM_INSTRUCTION
-#     tools       : [
-#                     AgentTool(calendar_agent),
-#                     AgentTool(task_agent),
-#                     AgentTool(email_agent),
-#                     AgentTool(research_agent),
-#                   ]
-#
-#   INPUT (via ADK Runner):
-#     ParsedCommand — arrives as the user message in ADK's message format
-#       {
-#         domain          : DomainType
-#         intent          : str
-#         entities        : dict
-#         priority        : int
-#         ambiguity_score : float
-#         session_ctx     : dict
-#       }
-#
-#   OUTPUT (via ADK event stream):
-#     - One or more AgentResult objects (from sub-agents)
-#     - Natural language summary text (streamed as TextChunks)
-#     - The event stream is consumed by synthesizer.build_response()
-#
-#   DELEGATION FLOW:
-#     1. Gemini reads ParsedCommand
-#     2. Decides: single agent or multi-agent?
-#     3. For single: calls the relevant AgentTool
-#     4. For compound: calls agents in sequence, passing intermediate results
-#     5. Generates a summary of all actions
-#
-# ============================================================================
+from command_center.config.settings import settings
+
+try:
+    from google.adk.agents import LlmAgent
+    from google.adk.tools import AgentTool
+except ImportError:
+    # Stubs if google-adk is not installed
+    class LlmAgent:
+        def __init__(self, **kwargs):
+            self.config = kwargs
+
+    class AgentTool:
+        def __init__(self, agent):
+            self.agent = agent
+
+from command_center.agents.calendar_agent import calendar_agent
+from command_center.agents.task_agent import task_agent
+from command_center.agents.email_agent import email_agent
+from command_center.agents.research_agent import research_agent
+
+SYSTEM_INSTRUCTION = """
+You are the primary orchestrator for a personal command center.
+You have access to 4 specialized agents as tools:
+  - calendar_agent: for scheduling, events, invites
+  - task_agent: for creating, tracking, prioritizing tasks
+  - email_agent: for drafting, sending, summarizing emails
+  - research_agent: for web searches and information gathering
+
+Rules:
+1. Analyze the user request and identify all required actions.
+2. For compound requests, call multiple agents in logical order.
+3. Pass the output of one agent as context to the next when they are sequential.
+4. If a calendar slot is unavailable, call calendar_agent to find the next free slot.
+5. Always confirm actions before executing irreversible ones (send email, delete task).
+6. Summarize all actions taken at the end.
+"""
+
+root_agent = LlmAgent(
+    name="command_center_root",
+    model=settings.GEMINI_MODEL,
+    instruction=SYSTEM_INSTRUCTION,
+    tools=[
+        AgentTool(calendar_agent),
+        AgentTool(task_agent),
+        AgentTool(email_agent),
+        AgentTool(research_agent),
+    ]
+)

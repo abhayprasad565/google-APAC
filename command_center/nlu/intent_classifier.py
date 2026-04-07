@@ -1,76 +1,54 @@
-# ============================================================================
-# FILE: nlu/intent_classifier.py
-# LAYER: L1 — Natural Language Understanding
-# ============================================================================
-#
-# PURPOSE:
-#   Takes a raw user message and returns a classified domain and intent
-#   string by making a lightweight Gemini API call with a structured output
-#   prompt. This is the FIRST step in L1 — it decides which agent(s) need
-#   to be involved.
-#
-# KEY RESPONSIBILITIES:
-#   1. Build a classification prompt with recent conversation history
-#   2. Call Gemini with structured JSON output format
-#   3. Parse the response to extract domain, intent, and confidence
-#   4. Fall back to "compound" domain for low-confidence classifications
-#
-# ============================================================================
-#
-#
-# ── CONSTANT: CLASSIFICATION_THRESHOLD ──────────────────────────────────────
-#
-#   float — confidence score below which the classifier returns
-#           domain="compound" and intent="multi_step"
-#   Default: 0.7
-#
-#
-# ── FUNCTION: classify_intent ───────────────────────────────────────────────
-#
-# async function classify_intent(message, session_ctx) -> tuple[DomainType, str, float]
-#
-#   TASK:
-#     Sends the user's raw message plus recent session history to Gemini
-#     with a prompt that instructs it to return a JSON classification.
-#     If confidence is below threshold, returns "compound" domain to
-#     trigger multi-agent handling.
-#
-#   INPUT:
-#     message     : str
-#       — raw natural-language user input
-#       — e.g. "Schedule a meeting with Alice on Friday"
-#
-#     session_ctx : dict (SessionState)
-#       — recent conversation history and user preferences
-#       — contains keys:
-#           recent_history : list[dict]  — last N turns
-#           user_timezone  : str         — e.g. "America/New_York"
-#           preferences    : dict        — user's default settings
-#
-#   OUTPUT:
-#     tuple of:
-#       domain     : DomainType  — Enum: calendar | task | email | research | compound
-#       intent     : str         — specific intent string
-#                                  e.g. "create_meeting", "summarize_inbox",
-#                                       "research_topic", "multi_step"
-#       confidence : float       — 0.0 to 1.0
-#
-#
-# ── FUNCTION: build_classification_prompt ───────────────────────────────────
-#
-# function build_classification_prompt(message, recent_history) -> str
-#
-#   TASK:
-#     Constructs the prompt string sent to Gemini for intent classification.
-#     Includes the user message, recent conversation turns for context, and
-#     explicit instructions to return JSON with domain/intent/confidence.
-#
-#   INPUT:
-#     message        : str             — raw user text
-#     recent_history : list[dict]      — last N conversation turns
-#                                        each: {role: str, content: str}
-#
-#   OUTPUT:
-#     str — the fully constructed prompt string for Gemini
-#
-# ============================================================================
+from typing import Dict, Any, List
+from google import genai
+from command_center.config.settings import settings
+from command_center.api.schemas import DomainType
+from pydantic import BaseModel
+
+CLASSIFICATION_THRESHOLD = 0.7
+
+class IntentClassification(BaseModel):
+    domain: DomainType
+    intent: str
+    confidence: float
+
+def build_classification_prompt(message: str, recent_history: list[dict[str, str]]) -> str:
+    history_str = "\n".join([f"{msg.get('role', 'user')}: {msg.get('content', '')}" for msg in recent_history])
+    prompt = f"""
+You are the Intent Classifier for a personal command center.
+Classify the following user message into one of the known domains and intents.
+
+Domains:
+- calendar: for scheduling, events, availability
+- task: for to-do items, reminders
+- email: for drafting, sending, reading emails
+- research: for web searching, finding information
+- compound: for multi-step tasks crossing domains
+
+History:
+{history_str}
+
+User message: "{message}"
+"""
+    return prompt
+
+async def classify_intent(message: str, session_ctx: dict[str, Any]) -> tuple[DomainType, str, float]:
+    recent_history = session_ctx.get("recent_history", [])
+    prompt = build_classification_prompt(message, recent_history)
+
+    client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+    response = await client.aio.models.generate_content(
+        model=settings.GEMINI_MODEL,
+        contents=prompt,
+        config=genai.types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=IntentClassification,
+            temperature=0.0
+        )
+    )
+
+    parsed = IntentClassification.model_validate_json(response.text)
+
+    if parsed.confidence < CLASSIFICATION_THRESHOLD:
+        return (DomainType.compound, "multi_step", parsed.confidence)
+
+    return (parsed.domain, parsed.intent, parsed.confidence)

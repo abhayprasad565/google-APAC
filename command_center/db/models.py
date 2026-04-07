@@ -1,104 +1,74 @@
-# ============================================================================
-# FILE: db/models.py
-# LAYER: L6 — Database ORM Models
-# ============================================================================
-#
-# PURPOSE:
-#   SQLAlchemy ORM model definitions for all Cloud SQL tables. Four tables
-#   back the L6 memory layer. This file contains NO business logic — only
-#   table/column definitions.
-#
-# ============================================================================
-#
-#
-# ── TABLE: sessions ─────────────────────────────────────────────────────────
-#
-#   TASK:
-#     Stores ADK session state. Each session represents a conversation
-#     between a user and the command center. The state_json field holds
-#     the full ADK session state blob (conversation history, context).
-#
-#   COLUMNS:
-#     id          : UUID       — Primary Key, auto-generated
-#     user_id     : str        — Indexed, the owning user
-#     state_json  : JSONB      — ADK session state blob
-#                                (conversation history, agent context)
-#     created_at  : datetime   — auto-set on insert
-#     updated_at  : datetime   — auto-set on insert and update
-#
-#   INDEXES:
-#     - idx_sessions_user_id ON user_id
-#
-#
-# ── TABLE: tasks ────────────────────────────────────────────────────────────
-#
-#   TASK:
-#     Stores user tasks managed by the task_agent. Supports full CRUD
-#     operations via task_repository.py.
-#
-#   COLUMNS:
-#     id           : UUID                                    — Primary Key
-#     user_id      : str                                     — Indexed
-#     session_id   : UUID                                    — Foreign Key → sessions.id
-#     title        : str                                     — task title
-#     description  : text                                    — detailed description
-#     priority     : int (1-5)                               — 1=low, 5=critical
-#     status       : Enum[pending, in_progress, completed, cancelled]
-#     due_date     : datetime | null                         — optional deadline
-#     tags         : ARRAY[str]                              — categorisation tags
-#     created_at   : datetime                                — auto-set on insert
-#     completed_at : datetime | null                         — set when completed
-#
-#   INDEXES:
-#     - idx_tasks_user_id ON user_id
-#     - idx_tasks_status ON status
-#     - idx_tasks_priority ON priority
-#
-#   FOREIGN KEYS:
-#     - session_id → sessions.id (ON DELETE CASCADE)
-#
-#
-# ── TABLE: agent_logs ───────────────────────────────────────────────────────
-#
-#   TASK:
-#     Audit trail for every tool call made by every agent. Used for
-#     debugging, performance monitoring, and usage analytics.
-#
-#   COLUMNS:
-#     id          : UUID        — Primary Key
-#     session_id  : UUID        — Foreign Key → sessions.id
-#     agent_id    : str         — which agent made the call
-#                                 (e.g. "calendar_agent", "task_agent")
-#     task_id     : UUID | null — the AgentTask this was part of (if any)
-#     tool_name   : str         — which tool was invoked
-#                                 (e.g. "gcal_create_event", "task_create")
-#     input_json  : JSONB       — the tool call parameters
-#     output_json : JSONB       — the tool call response
-#     latency_ms  : int         — wall-clock time for the tool call
-#     status      : str         — "success", "error", "timeout"
-#     created_at  : datetime    — auto-set on insert
-#
-#   INDEXES:
-#     - idx_agent_logs_session_id ON session_id
-#     - idx_agent_logs_agent_id ON agent_id
-#
-#   FOREIGN KEYS:
-#     - session_id → sessions.id (ON DELETE CASCADE)
-#
-#
-# ── TABLE: user_preferences ─────────────────────────────────────────────────
-#
-#   TASK:
-#     Stores per-user preferences that agents reference when making
-#     decisions (timezone, default calendar, email tone, notifications).
-#
-#   COLUMNS:
-#     user_id             : str          — Primary Key
-#     timezone            : str          — e.g. "Asia/Kolkata", "America/New_York"
-#     default_calendar_id : str          — Google Calendar ID (default: "primary")
-#     email_tone          : Enum[formal, casual, friendly]  — default email tone
-#     notification_prefs  : JSONB        — notification configuration
-#                                          e.g. {email: true, sms: false,
-#                                                summary_frequency: "daily"}
-#
-# ============================================================================
+"""
+L6 — SQLAlchemy ORM Models
+
+Defines the database tables for sessions, tasks, and agent logs.
+"""
+
+import uuid
+from datetime import datetime, timezone
+from sqlalchemy import (
+    Column, String, Integer, Float, Boolean, DateTime, Text, JSON,
+    Enum as SAEnum,
+)
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.orm import DeclarativeBase
+
+
+class Base(DeclarativeBase):
+    """Base class for all ORM models."""
+    pass
+
+
+class SessionRecord(Base):
+    """Stores ADK session state for persistence across requests."""
+    __tablename__ = "sessions"
+
+    session_id = Column(String(64), primary_key=True)
+    user_id = Column(String(128), nullable=False, index=True)
+    state = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class TaskRecord(Base):
+    """Stores user tasks managed by the task_agent."""
+    __tablename__ = "tasks"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(128), nullable=False, index=True)
+    title = Column(String(500), nullable=False)
+    description = Column(Text, default="")
+    priority = Column(Integer, default=3)  # 1=low … 5=critical
+    status = Column(
+        SAEnum("pending", "in_progress", "completed", "cancelled", name="task_status"),
+        default="pending",
+        nullable=False,
+    )
+    due_date = Column(DateTime(timezone=True), nullable=True)
+    tags = Column(JSON, default=list)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AgentLogRecord(Base):
+    """Audit log of every agent invocation for debugging and analytics."""
+    __tablename__ = "agent_logs"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(String(64), nullable=False, index=True)
+    agent_id = Column(String(64), nullable=False)
+    action = Column(String(256), nullable=False)
+    status = Column(String(32), nullable=False)  # success | partial | failed
+    latency_ms = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)
+    metadata_ = Column("metadata", JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

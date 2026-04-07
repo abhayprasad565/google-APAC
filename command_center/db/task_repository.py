@@ -1,115 +1,120 @@
-# ============================================================================
-# FILE: db/task_repository.py
-# LAYER: L6 — Task Data Access Layer
-# ============================================================================
-#
-# PURPOSE:
-#   Data access layer for the `tasks` table. ALL SQL queries for task
-#   operations live here. Called by tools/task_db_tool.py. Keeps SQL out
-#   of tool and agent files (separation of concerns).
-#
-# KEY RESPONSIBILITIES:
-#   1. CRUD operations for the tasks table
-#   2. Filtering by status, priority, user
-#   3. Sorting by priority DESC, due_date ASC
-#   4. Return ORM Task objects to callers
-#
-# ============================================================================
-#
-#
-# ── FUNCTION: create ────────────────────────────────────────────────────────
-#
-# async function create(task_data: dict) -> Task
-#
-#   TASK:
-#     Inserts a new task record into the tasks table.
-#
-#   INPUT:
-#     task_data : dict
-#       {
-#         user_id     : str          — the owning user
-#         title       : str          — task title
-#         description : str          — detailed description
-#         priority    : int          — 1-5
-#         due_date    : datetime     — parsed deadline
-#         tags        : list[str]   — categorisation tags
-#         status      : str          — "pending" (always for new tasks)
-#       }
-#
-#   OUTPUT:
-#     Task — SQLAlchemy ORM Task object with all fields populated,
-#            including the auto-generated id and created_at
-#
-#
-# ── FUNCTION: list ──────────────────────────────────────────────────────────
-#
-# async function list(user_id, filter_status, filter_priority, limit) -> list[Task]
-#
-#   TASK:
-#     Queries tasks for a specific user with optional filters. Results
-#     are always sorted by priority DESC, due_date ASC.
-#
-#   INPUT:
-#     user_id         : str       — filter to this user's tasks
-#     filter_status   : str|None  — status to filter on
-#                                   (e.g. "pending", "completed")
-#     filter_priority : int|None  — minimum priority (inclusive)
-#     limit           : int       — max results to return
-#
-#   OUTPUT:
-#     list[Task] — list of ORM Task objects, sorted by:
-#                  priority DESC, due_date ASC
-#
-#
-# ── FUNCTION: get ───────────────────────────────────────────────────────────
-#
-# async function get(task_id: str) -> Task | None
-#
-#   TASK:
-#     Retrieves a single task by its UUID.
-#
-#   INPUT:
-#     task_id : str — UUID of the task
-#
-#   OUTPUT:
-#     Task | None — the Task object if found, None otherwise
-#
-#
-# ── FUNCTION: update ────────────────────────────────────────────────────────
-#
-# async function update(task_id, changes: dict) -> Task
-#
-#   TASK:
-#     Updates specific fields of an existing task. Only the keys
-#     present in the changes dict are modified.
-#
-#   INPUT:
-#     task_id : str    — UUID of the task to update
-#     changes : dict   — key-value pairs to update
-#                        Valid keys: title, description, priority,
-#                                    due_date, tags, status, completed_at
-#
-#   OUTPUT:
-#     Task — the updated ORM Task object
-#
-#   SIDE EFFECTS:
-#     - Commits the transaction
-#
-#
-# ── FUNCTION: delete ────────────────────────────────────────────────────────
-#
-# async function delete(task_id: str) -> bool
-#
-#   TASK:
-#     Permanently removes a task from the database.
-#
-#   INPUT:
-#     task_id : str — UUID of the task to delete
-#
-#   OUTPUT:
-#     bool — True if the task was found and deleted, False if not found
-#
-#   SIDE EFFECTS:
-#     - Commits the transaction
-#
-# ============================================================================
+"""
+L6 — Task Repository
+
+Task CRUD operations backed by SQLAlchemy async sessions.
+Used by tools/task_db_tool.py — keeps SQL out of agent/tool files.
+"""
+
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Optional
+from sqlalchemy import select, update, delete
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from command_center.db.models import TaskRecord
+
+
+async def create_task(
+    db: AsyncSession,
+    user_id: str,
+    title: str,
+    description: str = "",
+    priority: int = 3,
+    due_date: Optional[datetime] = None,
+    tags: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Create a new task and return its summary."""
+    task = TaskRecord(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        title=title,
+        description=description,
+        priority=max(1, min(5, priority)),  # Clamp to 1-5
+        due_date=due_date,
+        tags=tags or [],
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    return {
+        "task_id": str(task.id),
+        "title": task.title,
+        "priority": task.priority,
+    }
+
+
+async def list_tasks(
+    db: AsyncSession,
+    user_id: str,
+    filter_status: str = "pending",
+    filter_priority: Optional[int] = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """List tasks sorted by priority DESC, due_date ASC."""
+    stmt = (
+        select(TaskRecord)
+        .where(TaskRecord.user_id == user_id)
+        .where(TaskRecord.status == filter_status)
+    )
+    if filter_priority is not None:
+        stmt = stmt.where(TaskRecord.priority >= filter_priority)
+
+    stmt = stmt.order_by(
+        TaskRecord.priority.desc(),
+        TaskRecord.due_date.asc().nulls_last(),
+    ).limit(limit)
+
+    result = await db.execute(stmt)
+    tasks = result.scalars().all()
+    return [
+        {
+            "id": str(t.id),
+            "title": t.title,
+            "priority": t.priority,
+            "due_date": t.due_date.isoformat() if t.due_date else None,
+        }
+        for t in tasks
+    ]
+
+
+async def update_task(
+    db: AsyncSession,
+    task_id: str,
+    changes: dict[str, Any],
+) -> dict[str, Any]:
+    """Update specific fields of a task."""
+    allowed_fields = {"title", "description", "priority", "due_date", "tags", "status"}
+    valid_changes = {k: v for k, v in changes.items() if k in allowed_fields}
+
+    if "priority" in valid_changes:
+        valid_changes["priority"] = max(1, min(5, valid_changes["priority"]))
+
+    stmt = (
+        update(TaskRecord)
+        .where(TaskRecord.id == uuid.UUID(task_id))
+        .values(**valid_changes, updated_at=datetime.now(timezone.utc))
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {"task_id": task_id, "updated_fields": list(valid_changes.keys())}
+
+
+async def complete_task(db: AsyncSession, task_id: str) -> dict[str, Any]:
+    """Mark a task as completed."""
+    now = datetime.now(timezone.utc)
+    stmt = (
+        update(TaskRecord)
+        .where(TaskRecord.id == uuid.UUID(task_id))
+        .values(status="completed", completed_at=now, updated_at=now)
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {"task_id": task_id, "status": "completed"}
+
+
+async def delete_task(db: AsyncSession, task_id: str) -> dict[str, Any]:
+    """Permanently delete a task."""
+    stmt = delete(TaskRecord).where(TaskRecord.id == uuid.UUID(task_id))
+    result = await db.execute(stmt)
+    await db.commit()
+    return {"deleted": result.rowcount > 0, "task_id": task_id}
