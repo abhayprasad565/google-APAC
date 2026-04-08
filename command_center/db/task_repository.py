@@ -25,7 +25,7 @@ async def create_task(
 ) -> dict[str, Any]:
     """Create a new task and return its summary."""
     task = TaskRecord(
-        id=uuid.uuid4(),
+        id=str(uuid.uuid4()),
         user_id=user_id,
         title=title,
         description=description,
@@ -91,7 +91,7 @@ async def update_task(
 
     stmt = (
         update(TaskRecord)
-        .where(TaskRecord.id == uuid.UUID(task_id))
+        .where(TaskRecord.id == task_id)
         .values(**valid_changes, updated_at=datetime.now(timezone.utc))
     )
     await db.execute(stmt)
@@ -104,7 +104,7 @@ async def complete_task(db: AsyncSession, task_id: str) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     stmt = (
         update(TaskRecord)
-        .where(TaskRecord.id == uuid.UUID(task_id))
+        .where(TaskRecord.id == task_id)
         .values(status="completed", completed_at=now, updated_at=now)
     )
     await db.execute(stmt)
@@ -114,7 +114,7 @@ async def complete_task(db: AsyncSession, task_id: str) -> dict[str, Any]:
 
 async def delete_task(db: AsyncSession, task_id: str) -> dict[str, Any]:
     """Permanently delete a task."""
-    stmt = delete(TaskRecord).where(TaskRecord.id == uuid.UUID(task_id))
+    stmt = delete(TaskRecord).where(TaskRecord.id == task_id)
     result = await db.execute(stmt)
     await db.commit()
     return {"deleted": result.rowcount > 0, "task_id": task_id}

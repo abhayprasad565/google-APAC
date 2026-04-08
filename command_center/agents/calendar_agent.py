@@ -7,11 +7,10 @@ except ImportError:
         def __init__(self, **kwargs):
             self.config = kwargs
 
-try:
-    from command_center.tools.calendar_mcp import load_calendar_tools
-except ImportError:
-    def load_calendar_tools():
-        return []
+# NOTE: calendar_mcp.load_calendar_tools() is async and cannot be called
+# at module import time. The tools are loaded later via the agent factory
+# in api/main.py. For now we start with an empty tools list.
+# When ADK supports async tool loading, refactor this.
 
 SYSTEM_INSTRUCTION = """
 You are the Calendar Agent. You handle all scheduling tasks.
@@ -28,5 +27,5 @@ calendar_agent = LlmAgent(
     name="calendar_agent",
     model=settings.GEMINI_MODEL,
     instruction=SYSTEM_INSTRUCTION,
-    tools=load_calendar_tools()
+    tools=[]  # MCP tools loaded asynchronously at startup
 )

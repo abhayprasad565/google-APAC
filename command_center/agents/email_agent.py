@@ -7,11 +7,8 @@ except ImportError:
         def __init__(self, **kwargs):
             self.config = kwargs
 
-try:
-    from command_center.tools.gmail_mcp import load_gmail_tools
-except ImportError:
-    def load_gmail_tools():
-        return []
+# NOTE: gmail_mcp.load_gmail_tools() is async and cannot be called
+# at module import time. Start with empty tools.
 
 SYSTEM_INSTRUCTION = """
 You are the Email Agent. You draft and send emails via Gmail.
@@ -26,5 +23,5 @@ email_agent = LlmAgent(
     name="email_agent",
     model=settings.GEMINI_MODEL,
     instruction=SYSTEM_INSTRUCTION,
-    tools=load_gmail_tools()
+    tools=[]  # MCP tools loaded asynchronously at startup
 )

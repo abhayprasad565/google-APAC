@@ -1,6 +1,9 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 
+# .env lives in command_center/ — same directory as this package's parent
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 class Settings(BaseSettings):
     # ADK / Gemini
     GOOGLE_API_KEY: str = ""
@@ -28,7 +31,7 @@ class Settings(BaseSettings):
     TOOL_TIMEOUT_MS: int = 10000
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore"
     )

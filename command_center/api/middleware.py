@@ -30,11 +30,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """
 
     # Paths that never require authentication
-    EXEMPT_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
+    EXEMPT_PATHS = {"/health", "/docs", "/openapi.json", "/redoc", "/", "/favicon.ico"}
+    EXEMPT_PREFIXES = ("/dev-ui/",)
 
     async def dispatch(self, request: Request, call_next):
         # Skip auth for exempt paths
         if request.url.path in self.EXEMPT_PATHS:
+            return await call_next(request)
+
+        # Skip auth for exempt path prefixes (e.g. ADK dev UI static assets)
+        if any(request.url.path.startswith(p) for p in self.EXEMPT_PREFIXES):
             return await call_next(request)
 
         # Development mode: if no API keys are configured, skip auth

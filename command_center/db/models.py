@@ -2,15 +2,14 @@
 L6 — SQLAlchemy ORM Models
 
 Defines the database tables for sessions, tasks, and agent logs.
+Supports both PostgreSQL and SQLite backends.
 """
 
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Integer, Float, Boolean, DateTime, Text, JSON,
-    Enum as SAEnum,
 )
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -38,13 +37,13 @@ class TaskRecord(Base):
     """Stores user tasks managed by the task_agent."""
     __tablename__ = "tasks"
 
-    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(128), nullable=False, index=True)
     title = Column(String(500), nullable=False)
     description = Column(Text, default="")
     priority = Column(Integer, default=3)  # 1=low … 5=critical
     status = Column(
-        SAEnum("pending", "in_progress", "completed", "cancelled", name="task_status"),
+        String(20),
         default="pending",
         nullable=False,
     )
@@ -63,7 +62,7 @@ class AgentLogRecord(Base):
     """Audit log of every agent invocation for debugging and analytics."""
     __tablename__ = "agent_logs"
 
-    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     session_id = Column(String(64), nullable=False, index=True)
     agent_id = Column(String(64), nullable=False)
     action = Column(String(256), nullable=False)

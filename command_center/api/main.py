@@ -40,7 +40,20 @@ try:
     from google.adk.tools import AgentTool
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
+    from google.genai import types as genai_types
     ADK_AVAILABLE = True
+
+    # ── Gemma 4 Registry Patch ──────────────────────────────────────────────
+    # ADK v1.28.1 only registers 'gemma-3.*'. Gemma 4 models (e.g.
+    # gemma-4-26b-a4b-it) exist in the Gemini API but are not yet in the
+    # ADK registry. We register them using the same Gemma LLM class.
+    try:
+        from google.adk.models.registry import LLMRegistry
+        from google.adk.models.gemma_llm import Gemma
+        LLMRegistry._register(r'gemma-4.*', Gemma)
+    except Exception:
+        pass  # Non-fatal — only affects Gemma 4 usage
+
 except ImportError:
     ADK_AVAILABLE = False
 
@@ -285,10 +298,15 @@ async def handle_run(request: UserRequest, raw_request: Request) -> FinalRespons
     )
 
     # Run the agent pipeline
+    content_message = genai_types.Content(
+        role="user",
+        parts=[genai_types.Part(text=adk_message)],
+    ) if ADK_AVAILABLE else adk_message
+
     events = runner.run_async(
         session_id=session.id if hasattr(session, "id") else request.session_id,
         user_id=request.user_id,
-        new_message=adk_message,
+        new_message=content_message,
     )
 
     # Synthesise the response
@@ -367,10 +385,15 @@ async def handle_stream(
         )
 
         # Stream events from the runner
+        content_message = genai_types.Content(
+            role="user",
+            parts=[genai_types.Part(text=adk_message)],
+        ) if ADK_AVAILABLE else adk_message
+
         events = runner.run_async(
             session_id=session.id if hasattr(session, "id") else session_id,
             user_id=user_id,
-            new_message=adk_message,
+            new_message=content_message,
         )
 
         async for event in events:
